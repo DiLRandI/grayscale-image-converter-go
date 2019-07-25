@@ -15,6 +15,11 @@ type ImageSet interface {
 	Set(x, y int, c color.Color)
 }
 
+type ProcessedData struct {
+	index int
+	data  *image.RGBA
+}
+
 func main() {
 	start := time.Now()
 
@@ -38,32 +43,51 @@ func main() {
 		panic(err)
 	}
 
-	b := img.Bounds()
-	imgSet := image.NewRGBA(b)
-
-	go func() {
-		for x := 0; x < b.Max.X; x++ {
-			for y := 0; y < b.Max.Y; y++ {
-				oldPixel := img.At(x, y)
-				r, g, b, _ := oldPixel.RGBA()
-				lum := 0.299*float64(r) + 0.587*float64(g) + 0.114*float64(b)
-				pixel := color.Gray{uint8(lum / 256)}
-				imgSet.Set(x, y, pixel)
-			}
-		}
-	}()
-
 	outFile, err := os.Create(fmt.Sprintf("%s/%s", outDir, outFileName))
 
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
+	}
+	defer outFile.Close()
+
+	b := img.Bounds()
+	cpus := runtime.NumCPU()
+	c := make(chan *ProcessedData)
+
+	xRange := b.Max.X / cpus
+	startX := 0
+
+	for i := 0; i < cpus; i++ {
+		go func(pi, sx int) {
+			currentIndex := pi
+			data := processImage(sx, sx+xRange, 0, b.Max.Y, img)
+
+			c <- &ProcessedData{
+				index: currentIndex,
+				data:  data,
+			}
+		}(i, startX)
+		startX = startX + xRange + 1
 	}
 
-	defer outFile.Close()
-	jpeg.Encode(outFile, imgSet, nil)
+	// jpeg.Encode(outFile, imgSet, nil)
 
 	elapsed := time.Since(start)
 	log.Printf("Execution time %s", elapsed)
-	fmt.Printf("Number of cpus %d \n", runtime.NumCPU())
-	fmt.Printf("Number of go rutines %d \n", runtime.NumGoroutine())
+}
+
+func processImage(startX, maxX, startY, maxY int, img image.Image) *image.RGBA {
+	imgSet := image.NewRGBA(img.Bounds())
+
+	for x := startX; x < maxX; x++ {
+		for y := startY; y < maxY; y++ {
+			oldPixel := img.At(x, y)
+			r, g, b, _ := oldPixel.RGBA()
+			lum := 0.299*float64(r) + 0.587*float64(g) + 0.114*float64(b)
+			pixel := color.Gray{uint8(lum / 256)}
+			imgSet.Set(x, y, pixel)
+		}
+	}
+
+	return imgSet
 }
