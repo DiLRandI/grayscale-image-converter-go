@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
 	"image/jpeg"
 	"log"
 	"os"
@@ -52,32 +53,58 @@ func main() {
 
 	b := img.Bounds()
 	cpus := runtime.NumCPU()
-	c := make(chan *ProcessedData)
-
+	c := make(chan *ProcessedData, cpus)
+	defer close(c)
 	xRange := b.Max.X / cpus
 	startX := 0
 
 	for i := 0; i < cpus; i++ {
-		go func(pi, sx int) {
-			currentIndex := pi
-			data := processImage(sx, sx+xRange, 0, b.Max.Y, img)
 
-			c <- &ProcessedData{
-				index: currentIndex,
+		go func(pi, sx int) {
+			data := processImage(sx, sx+xRange, 0, b.Max.Y, img)
+			pd := &ProcessedData{
+				index: pi,
 				data:  data,
 			}
+			c <- pd
 		}(i, startX)
-		startX = startX + xRange + 1
+
+		startX = startX + xRange
 	}
 
-	// jpeg.Encode(outFile, imgSet, nil)
+	pds := make([]*ProcessedData, cpus)
+
+	count := 0
+	for count < cpus {
+		pd := <-c
+		pds[pd.index] = pd
+		count++
+	}
+
+	newImg := image.NewRGBA(b)
+
+	for _, d := range pds {
+		draw.Draw(newImg, d.data.Bounds(), d.data.SubImage(d.data.Bounds()), d.data.Bounds().Min, draw.Src)
+	}
+
+	jpeg.Encode(outFile, newImg, nil)
 
 	elapsed := time.Since(start)
 	log.Printf("Execution time %s", elapsed)
 }
 
 func processImage(startX, maxX, startY, maxY int, img image.Image) *image.RGBA {
-	imgSet := image.NewRGBA(img.Bounds())
+	r := image.Rectangle{
+		Min: image.Point{
+			X: startX,
+			Y: startY,
+		},
+		Max: image.Point{
+			X: maxX,
+			Y: maxY,
+		},
+	}
+	imgSet := image.NewRGBA(r)
 
 	for x := startX; x < maxX; x++ {
 		for y := startY; y < maxY; y++ {
